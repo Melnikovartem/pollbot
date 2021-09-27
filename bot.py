@@ -1,6 +1,7 @@
 #!venv/bin/python
 import logging
 import aiohttp
+from math import floor
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.utils import deep_linking, exceptions
 
@@ -23,7 +24,7 @@ class Poll:
         self.send_out = False
         self.question = "Какая версия лучше?"
         self.refs = []
-        self.answers = {}
+        self.answer_ids = {}
         self.texts = {}
 
     async def send(self):
@@ -38,6 +39,7 @@ class Poll:
             msg = await bot.send_poll(chat_id=chat_id, question=self.question,
                                       is_anonymous=False, options=self.refs)
             self.polls_ids[chat_id] = msg.message_id
+            self.answer_ids[msg.poll.id] = {}
         self.send_out = True
         return "Отправлено"
 
@@ -61,12 +63,28 @@ class Poll:
         return "Опросы остановлены"
 
     async def send_results(self, chat_id):
-        return
+        results = {}
+        for ref in self.refs:
+            results[ref] = 0
+        sum = 0
+        for poll_id in self.answer_ids:
+            for userd_id in self.answer_ids[poll_id]:
+                for id in self.answer_ids[poll_id][userd_id]:
+                    results[self.refs[id]] += 1
+                    sum += 1
 
-    async def change_answer(self, chat_id, user_id, ans_ids):
-        if not user_id in self.answers:
-            self.answers[user_id] = {}
-        self.answers[user_id][chat_id] = ans_ids
+        stats = ""
+        for ref in self.refs:
+            bar = ""
+            if sum > 0:
+                bar = "=" * floor(25 * results[ref] / sum)
+            stats += f"***{ref}*** : {results[ref]}\n{bar}\n\n"
+        await bot.send_message(chat_id=chat_id, text=stats, parse_mode="Markdown")
+
+    def change_answer(self, poll_id, user_id, ans_ids):
+        if not poll_id in self.answer_ids:
+            return  # add to logger ?
+        self.answer_ids[poll_id][user_id] = ans_ids
 
 
 @dp.poll_answer_handler()
@@ -81,31 +99,8 @@ async def handle_poll_answer(quiz_answer: types.PollAnswer):
     """
     global poll_active
     if poll_active:
-        await bot.stop_poll(saved_quiz.chat_id, saved_quiz.message_id)
-
-
-@dp.poll_handler(lambda active_quiz: active_quiz.is_closed is True)
-async def just_poll_answer(active_quiz: types.Poll):
-    """
-    Реагирует на закрытие опроса/викторины. Если убрать проверку на poll.is_closed == True,
-    то этот хэндлер будет срабатывать при каждом взаимодействии с опросом/викториной, наравне
-    с poll_answer_handler
-    Чтобы не было путаницы:
-    * active_quiz - викторина, в которой кто-то выбрал ответ
-    * saved_quiz - викторина, находящаяся в нашем "хранилище" в памяти
-    Этот хэндлер частично повторяет тот, что выше, в части, касающейся поиска нужного опроса в нашем "хранилище".
-    :param active_quiz: объект Poll
-    """
-    quiz_owner = polls_owners.get(active_quiz.id)
-    if not quiz_owner:
-        logging.error(
-            f"Не могу найти автора викторины с active_quiz.id = {active_quiz.id}")
-        return
-    for num, saved_quiz in enumerate(polls_database[quiz_owner]):
-        if saved_quiz.quiz_id == active_quiz.id:
-            # Удаляем викторину из обоих наших "хранилищ"
-            del polls_owners[active_quiz.id]
-            del polls_database[quiz_owner][num]
+        poll_active.change_answer(
+            quiz_answer.poll_id, quiz_answer.user.id, quiz_answer.option_ids)
 
 
 @dp.message_handler(commands=["poll"])
@@ -117,8 +112,8 @@ async def cmd_start(message: types.Message):
         waiting = await message.answer(text="generating 0%")
         for i in range(amount):
             async with aiohttp.ClientSession() as session:
-                poll.add_option("somewjafjkljsal jfjasojfiasjfiojasfoi")
-                continue
+                # poll.add_option("somewjafjkljsal jfjasojfiasjfiojasfoi")
+                # continue
 
                 url = "http://46.17.97.44:5001/stih/?name=%D1%81%D0%BE%D1%81%D0%B8&temp=1.0&length=100"
                 async with session.get(url) as resp:
@@ -157,6 +152,7 @@ async def cmd_start(message: types.Message):
         ans = "Опрос не найден"
         if poll_active:
             ans = await poll_active.finish(message.chat.id)
+            poll_active = None
         await message.answer(ans, reply_markup=remove_keyboard)
 
 

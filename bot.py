@@ -15,40 +15,58 @@ poll_active = None
 
 
 class Poll:
-    send_out = False
-    question = "?"
-    options = []
-
     def __init__(self, innit_id):
         # Используем подсказки типов, чтобы было проще ориентироваться.
-        self.innit = innit_id
+        self.innit_id = innit_id
         self.chat_ids = [innit_id]
-        self.polls_ids = []
+        self.polls_ids = {}
+        self.send_out = False
+        self.question = "Какая версия лучше?"
+        self.refs = []
+        self.answers = {}
+        self.texts = {}
 
     async def send(self):
         if self.send_out:
             return "Эта версия уже была отправлена"
-        options = []
-        for op in self.options:
-            options.append(op["text"])
 
         for chat_id in self.chat_ids:
-            self.send_options(chat_id)
+            await self.send_options(chat_id)
 
+        options = map(lambda x: self.texts[x], self.refs)
         for chat_id in self.chat_ids:
             msg = await bot.send_poll(chat_id=chat_id, question=self.question,
-                                      is_anonymous=False, options=options)
-            self.polls_ids.append(msg.poll.id)
+                                      is_anonymous=False, options=self.refs)
+            self.polls_ids[chat_id] = msg.message_id
         self.send_out = True
         return "Отправлено"
 
     def add_option(self, text):
-        ref = "v" + str(len(self.options) + 1)
-        self.options.append({"ref": ref, "text": text})
+        ref = "v" + str(len(self.refs) + 1)
+        self.refs.append(ref)
+        self.texts[ref] = text
 
     async def send_options(self, chat_id):
-        for op in self.options:
-            await bot.send_message(chat_id=chat_id, text=f"***{op['ref']}***\n" + op['text'], parse_mode="Markdown")
+        for ref in self.refs:
+            await bot.send_message(chat_id=chat_id, text=f"***{ref}***\n" + self.texts[ref], parse_mode="Markdown")
+
+    async def finish(self, close_id):
+        if not self.send_out:
+            return "Опрос не был отправлен"
+        for chat_id in self.polls_ids:
+            await bot.stop_poll(chat_id, self.polls_ids[chat_id])
+        await self.send_results(close_id)
+        if close_id != self.innit_id:
+            await self.send_results(self.innit_id)
+        return "Опросы остановлены"
+
+    async def send_results(self, chat_id):
+        return
+
+    async def change_answer(self, chat_id, user_id, ans_ids):
+        if not user_id in self.answers:
+            self.answers[user_id] = {}
+        self.answers[user_id][chat_id] = ans_ids
 
 
 @dp.poll_answer_handler()
@@ -61,12 +79,8 @@ async def handle_poll_answer(quiz_answer: types.PollAnswer):
     * saved_quiz - викторина, находящаяся в нашем "хранилище" в памяти
     :param quiz_answer: объект PollAnswer с информацией о голосующем
     """
-    quiz_owner = polls_owners.get(quiz_answer.poll_id)
-    if not quiz_owner:
-        logging.error(
-            f"Не могу найти автора викторины с quiz_answer.poll_id = {quiz_answer.poll_id}")
-        return
-    for saved_quiz in polls_database[quiz_owner]:
+    global poll_active
+    if poll_active:
         await bot.stop_poll(saved_quiz.chat_id, saved_quiz.message_id)
 
 
@@ -98,7 +112,6 @@ async def just_poll_answer(active_quiz: types.Poll):
 async def cmd_start(message: types.Message):
     if message.chat.type == types.ChatType.PRIVATE:
 
-        options = []
         poll = Poll(message.chat.id)
         amount = 2
         waiting = await message.answer(text="generating 0%")
@@ -118,8 +131,6 @@ async def cmd_start(message: types.Message):
             await poll.send_options(message.chat.id)
             await waiting.delete()
         except exceptions.CantParseEntities as e:
-            print(e)
-            print(poll.options)
             await waiting.edit_text(
                 text=f"bad entity")
             return
@@ -138,16 +149,21 @@ async def cmd_start(message: types.Message):
         await message.answer(f"Отправляем в {len(poll_active.chat_ids)} чат{suffix}?", reply_markup=keyboard_conformation)
 
 
+remove_keyboard = types.ReplyKeyboardRemove()
 @dp.message_handler(commands=["finish"])
 async def cmd_start(message: types.Message):
     if message.chat.type == types.ChatType.PRIVATE:
-        await msg.answer("TODO", reply_markup=keyboard_conformation)
+        global poll_active
+        ans = "Опрос не найден"
+        if poll_active:
+            ans = await poll_active.finish(message.chat.id)
+        await message.answer(ans, reply_markup=remove_keyboard)
 
 
 @dp.message_handler(lambda message: message.text == "Отмена")
 async def action_cancel(message: types.Message):
-    global poll_active
     remove_keyboard = types.ReplyKeyboardRemove()
+    global poll_active
     if poll_active and not poll_active.send_out:
         poll_active = None
     await message.answer("Введите /poll, чтобы начать заново", reply_markup=remove_keyboard)

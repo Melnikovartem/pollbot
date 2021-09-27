@@ -36,8 +36,8 @@ except:
 def check(chat_id):  # surely there is a smarter way around it but i am too lazy to google
     if not chat_id in chats_send:
         chats_send[chat_id] = True
-    with open(CHATS_CAHCE, 'wb') as fp:
-        pickle.dump(chats_send, fp)
+        with open(CHATS_CAHCE, 'wb') as fp:
+            pickle.dump(chats_send, fp)
 
 
 @dp.poll_answer_handler()

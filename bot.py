@@ -1,17 +1,54 @@
 #!venv/bin/python
 import logging
+import aiohttp
 from aiogram import Bot, Dispatcher, executor, types
-from aiogram.utils import deep_linking
+from aiogram.utils import deep_linking, exceptions
 
-from quizzer import Quiz
+import urllib.request
+import json
 
-
-bot = Bot(token="1234567890:токен")
+bot = Bot(token="248190991:AAFYN8IC-4-Zb6nXzMeBkPvM5YCxst094mw")
 dp = Dispatcher(bot)
 logging.basicConfig(level=logging.INFO)
 
-quizzes_database = {}  # здесь хранится информация о викторинах
-quizzes_owners = {}    # здесь хранятся пары "id викторины <--> id её создателя"
+poll_active = None
+
+
+class Poll:
+    send_out = False
+    question = "?"
+    options = []
+
+    def __init__(self, innit_id):
+        # Используем подсказки типов, чтобы было проще ориентироваться.
+        self.innit = innit_id
+        self.chat_ids = [innit_id]
+        self.polls_ids = []
+
+    async def send(self):
+        if self.send_out:
+            return "Эта версия уже была отправлена"
+        options = []
+        for op in self.options:
+            options.append(op["text"])
+
+        for chat_id in self.chat_ids:
+            self.send_options(chat_id)
+
+        for chat_id in self.chat_ids:
+            msg = await bot.send_poll(chat_id=chat_id, question=self.question,
+                                      is_anonymous=False, options=options)
+            self.polls_ids.append(msg.poll.id)
+        self.send_out = True
+        return "Отправлено"
+
+    def add_option(self, text):
+        ref = "v" + str(len(self.options) + 1)
+        self.options.append({"ref": ref, "text": text})
+
+    async def send_options(self, chat_id):
+        for op in self.options:
+            await bot.send_message(chat_id=chat_id, text=f"***{op['ref']}***\n" + op['text'], parse_mode="Markdown")
 
 
 @dp.poll_answer_handler()
@@ -24,19 +61,13 @@ async def handle_poll_answer(quiz_answer: types.PollAnswer):
     * saved_quiz - викторина, находящаяся в нашем "хранилище" в памяти
     :param quiz_answer: объект PollAnswer с информацией о голосующем
     """
-    quiz_owner = quizzes_owners.get(quiz_answer.poll_id)
+    quiz_owner = polls_owners.get(quiz_answer.poll_id)
     if not quiz_owner:
-        logging.error(f"Не могу найти автора викторины с quiz_answer.poll_id = {quiz_answer.poll_id}")
+        logging.error(
+            f"Не могу найти автора викторины с quiz_answer.poll_id = {quiz_answer.poll_id}")
         return
-    for saved_quiz in quizzes_database[quiz_owner]:
-        if saved_quiz.quiz_id == quiz_answer.poll_id:
-            # Проверяем, прав ли юзер. В викторине (пока) один ответ, поэтому можно спокойно взять 0-й элемент ответа.
-            if saved_quiz.correct_option_id == quiz_answer.option_ids[0]:
-                # Если прав, то добавляем в список
-                saved_quiz.winners.append(quiz_answer.user.id)
-                # По нашему условию, если есть двое правильно ответивших, закрываем викторину.
-                if len(saved_quiz.winners) == 2:
-                    await bot.stop_poll(saved_quiz.chat_id, saved_quiz.message_id)
+    for saved_quiz in polls_database[quiz_owner]:
+        await bot.stop_poll(saved_quiz.chat_id, saved_quiz.message_id)
 
 
 @dp.poll_handler(lambda active_quiz: active_quiz.is_closed is True)
@@ -51,100 +82,91 @@ async def just_poll_answer(active_quiz: types.Poll):
     Этот хэндлер частично повторяет тот, что выше, в части, касающейся поиска нужного опроса в нашем "хранилище".
     :param active_quiz: объект Poll
     """
-    quiz_owner = quizzes_owners.get(active_quiz.id)
+    quiz_owner = polls_owners.get(active_quiz.id)
     if not quiz_owner:
-        logging.error(f"Не могу найти автора викторины с active_quiz.id = {active_quiz.id}")
+        logging.error(
+            f"Не могу найти автора викторины с active_quiz.id = {active_quiz.id}")
         return
-    for num, saved_quiz in enumerate(quizzes_database[quiz_owner]):
+    for num, saved_quiz in enumerate(polls_database[quiz_owner]):
         if saved_quiz.quiz_id == active_quiz.id:
-            # Используем ID победителей, чтобы получить по ним имена игроков и поздравить.
-            congrats_text = []
-            for winner in saved_quiz.winners:
-                chat_member_info = await bot.get_chat_member(saved_quiz.chat_id, winner)
-                congrats_text.append(chat_member_info.user.get_mention(as_html=True))
-
-            await bot.send_message(saved_quiz.chat_id, "Викторина закончена, всем спасибо! Вот наши победители:\n\n"
-                                   + "\n".join(congrats_text), parse_mode="HTML")
             # Удаляем викторину из обоих наших "хранилищ"
-            del quizzes_owners[active_quiz.id]
-            del quizzes_database[quiz_owner][num]
+            del polls_owners[active_quiz.id]
+            del polls_database[quiz_owner][num]
 
 
-@dp.message_handler(commands=["start"])
+@dp.message_handler(commands=["poll"])
 async def cmd_start(message: types.Message):
     if message.chat.type == types.ChatType.PRIVATE:
-        poll_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        poll_keyboard.add(types.KeyboardButton(text="Создать викторину",
-                                               request_poll=types.KeyboardButtonPollType(type=types.PollType.QUIZ)))
-        poll_keyboard.add(types.KeyboardButton(text="Отмена"))
-        await message.answer("Нажмите на кнопку ниже и создайте викторину! "
-                             "Внимание: в дальнейшем она будет публичной (неанонимной).", reply_markup=poll_keyboard)
-    else:
-        words = message.text.split()
-        # Только команда /start без параметров. В этом случае отправляем в личку с ботом.
-        if len(words) == 1:
-            bot_info = await bot.get_me()            # Получаем информацию о нашем боте
-            keyboard = types.InlineKeyboardMarkup()  # Создаём клавиатуру с URL-кнопкой для перехода в ЛС
-            move_to_dm_button = types.InlineKeyboardButton(text="Перейти в ЛС",
-                                                           url=f"t.me/{bot_info.username}?start=anything")
-            keyboard.add(move_to_dm_button)
-            await message.reply("Не выбрана ни одна викторина. Пожалуйста, перейдите в личные сообщения с ботом, "
-                                "чтобы создать новую.", reply_markup=keyboard)
-        # Если у команды /start или /startgroup есть параметр, то это, скорее всего, ID викторины.
-        # Проверяем и отправляем.
-        else:
-            quiz_owner = quizzes_owners.get(words[1])
-            if not quiz_owner:
-                await message.reply("Викторина удалена, недействительна или уже запущена в другой группе. Попробуйте создать новую.")
-                return
-            for saved_quiz in quizzes_database[quiz_owner]:  # Проходим по всем сохранённым викторинам от конкретного user ID
-                if saved_quiz.quiz_id == words[1]:           # Нашли нужную викторину, отправляем её.
-                    msg = await bot.send_poll(chat_id=message.chat.id, question=saved_quiz.question,
-                                              is_anonymous=False, options=saved_quiz.options, type="quiz",
-                                              correct_option_id=saved_quiz.correct_option_id)
-                    quizzes_owners[msg.poll.id] = quiz_owner  # ID викторины при отправке уже другой, создаём запись.
-                    del quizzes_owners[words[1]]              # Старую запись удаляем.
-                    saved_quiz.quiz_id = msg.poll.id          # В "хранилище" викторин тоже меняем ID викторины на новый
-                    saved_quiz.chat_id = msg.chat.id          # ... а также сохраняем chat_id ...
-                    saved_quiz.message_id = msg.message_id    # ... и message_id для последующего закрытия викторины.
+
+        options = []
+        poll = Poll(message.chat.id)
+        amount = 2
+        waiting = await message.answer(text="generating 0%")
+        for i in range(amount):
+            async with aiohttp.ClientSession() as session:
+                poll.add_option("somewjafjkljsal jfjasojfiasjfiojasfoi")
+                continue
+
+                url = "http://46.17.97.44:5001/stih/?name=%D1%81%D0%BE%D1%81%D0%B8&temp=1.0&length=100"
+                async with session.get(url) as resp:
+                    data = await resp.json()
+                    poll.add_option(data["text"])
+                    await waiting.edit_text(
+                        text=f"generating {round((i + 1)/amount * 100)}%")
+
+        try:
+            await poll.send_options(message.chat.id)
+            await waiting.delete()
+        except exceptions.CantParseEntities as e:
+            print(e)
+            print(poll.options)
+            await waiting.edit_text(
+                text=f"bad entity")
+            return
+        global poll_active
+        poll_active = poll
+
+        keyboard_conformation = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        keyboard_conformation.add(types.KeyboardButton(text="Ок"))
+        keyboard_conformation.add(types.KeyboardButton(text="Отмена"))
+
+        suffix = ""
+        if len(poll_active.chat_ids) > 5:
+            suffix = "ов"
+        elif len(poll_active.chat_ids) > 2:
+            suffix = "а"
+        await message.answer(f"Отправляем в {len(poll_active.chat_ids)} чат{suffix}?", reply_markup=keyboard_conformation)
+
+
+@dp.message_handler(commands=["finish"])
+async def cmd_start(message: types.Message):
+    if message.chat.type == types.ChatType.PRIVATE:
+        await msg.answer("TODO", reply_markup=keyboard_conformation)
 
 
 @dp.message_handler(lambda message: message.text == "Отмена")
 async def action_cancel(message: types.Message):
+    global poll_active
     remove_keyboard = types.ReplyKeyboardRemove()
-    await message.answer("Действие отменено. Введите /start, чтобы начать заново.", reply_markup=remove_keyboard)
+    if poll_active and not poll_active.send_out:
+        poll_active = None
+    await message.answer("Введите /poll, чтобы начать заново", reply_markup=remove_keyboard)
 
 
-@dp.message_handler(content_types=["poll"])
-async def msg_with_poll(message: types.Message):
-    # Если юзер раньше не присылал запросы, выделяем под него запись
-    if not quizzes_database.get(str(message.from_user.id)):
-        quizzes_database[str(message.from_user.id)] = []
-
-    # Если юзер решил вручную отправить не викторину, а опрос, откажем ему.
-    if message.poll.type != "quiz":
-        await message.reply("Извините, я принимаю только викторины (quiz)!")
-        return
-
-    # Сохраняем себе викторину в память
-    quizzes_database[str(message.from_user.id)].append(Quiz(
-        quiz_id=message.poll.id,
-        question=message.poll.question,
-        options=[o.text for o in message.poll.options],
-        correct_option_id=message.poll.correct_option_id,
-        owner_id=message.from_user.id)
-    )
-    # Сохраняем информацию о её владельце для быстрого поиска в дальнейшем
-    quizzes_owners[message.poll.id] = str(message.from_user.id)
-
-    await message.reply(
-        f"Викторина сохранена. Общее число сохранённых викторин: {len(quizzes_database[str(message.from_user.id)])}")
+@dp.message_handler(lambda message: message.text == "Ок")
+async def action_cancel(message: types.Message):
+    remove_keyboard = types.ReplyKeyboardRemove()
+    global poll_active
+    ans = "Опрос не найден"
+    if poll_active:
+        ans = await poll_active.send()
+    await message.answer(ans, reply_markup=remove_keyboard)
 
 
 @dp.inline_handler()  # Обработчик любых инлайн-запросов
 async def inline_query(query: types.InlineQuery):
     results = []
-    user_quizzes = quizzes_database.get(str(query.from_user.id))
+    user_quizzes = polls_database.get(str(query.from_user.id))
     if user_quizzes:
         for quiz in user_quizzes:
             keyboard = types.InlineKeyboardMarkup()

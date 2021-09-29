@@ -4,7 +4,7 @@
 
 1) Пишем api ключ бота тг в файл tg_key
 
-2) `docker build . <container_name>`
+2) `docker build -t <container_name> .`
 
 2) `docker run <container_name>`
 

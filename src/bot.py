@@ -108,9 +108,14 @@ async def cmd_start(message: types.Message):
             async with session.get(api_url) as resp:
                 data = await resp.json()
                 text = data["text"]
-                text.replace("<", "&lt;")
-                text.replace(">", "&gt;")
-                poll.add_option(data["text"])
+                text = text.replace("<emphasis>", "___")
+                text = text.replace("</emphasis>", "___")
+                text = text.replace("<empty-line />", "\n\n")
+                text = text.replace("<", "&lt;")
+                text = text.replace(">", "&gt;")
+                text = text.replace("&", "&amp;")
+                text = text.replace("”", "&quot;")
+                poll.add_option(text)
                 await waiting.edit_text(
                     text=f"generating {round((i + 1)/amount * 100)}%")
 
@@ -119,6 +124,7 @@ async def cmd_start(message: types.Message):
         await poll.send_options(bot, message.chat.id)
     except exceptions.CantParseEntities as e:
         await message.answer(text=f"bad entity")
+        print(poll.texts)
         return
     poll_active = poll
 
@@ -239,12 +245,15 @@ async def action_cancel(message: types.Message):
 
     if message.chat.type != types.ChatType.PRIVATE:
         return
-    if not message.from_user.id in admins:
-        await message.answer("Нет доступа")
+    global poll_active
+    if not poll_active:
+        await message.answer("Опрос не найден", reply_markup=remove_keyboard)
         return
-
+    if not message.from_user.id in admins:
+        await message.answer("Нет доступа", reply_markup=remove_keyboard)
+        return
     if poll_active.send_out:
-        await message.answer("Aктивный опрос уже отправлен")
+        await message.answer("Aктивный опрос уже отправлен", reply_markup=remove_keyboard)
         return
 
     poll_active = None
@@ -256,12 +265,12 @@ async def action_cancel(message: types.Message):
     check(message.chat.id)
     if message.chat.type != types.ChatType.PRIVATE:
         return
-    if not message.from_user.id in admins:
-        await message.answer("Нет доступа")
-        return
     global poll_active
     if not poll_active:
-        await message.answer("Опрос не найден")
+        await message.answer("Опрос не найден", reply_markup=remove_keyboard)
+        return
+    if not message.from_user.id in admins:
+        await message.answer("Нет доступа", reply_markup=remove_keyboard)
         return
 
     ans = await poll_active.send(bot, chats_send)

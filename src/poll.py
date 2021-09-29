@@ -25,10 +25,7 @@ class Poll:
         for chat_id in chats_send:
             if not chats_send[chat_id]:
                 continue
-            msg = await bot.send_poll(chat_id=chat_id, question=self.question,
-                                      is_anonymous=False, options=self.refs)
-            self.polls_ids[chat_id] = msg.message_id
-            self.answer_ids[msg.poll.id] = {}
+            await self.send_poll(bot, chat_id)
         self.send_out = True
         return "Отправлено"
 
@@ -41,11 +38,20 @@ class Poll:
         for ref in self.refs:
             await bot.send_message(chat_id=chat_id, text=f"***{ref}***\n" + self.texts[ref], parse_mode="Markdown")
 
+    async def send_poll(self, bot, chat_id):
+        msg = await bot.send_poll(chat_id=chat_id, question=self.question,
+                                  is_anonymous=False, options=self.refs)
+        self.polls_ids[chat_id] = msg.message_id
+        self.answer_ids[msg.poll.id] = {}
+
     async def finish(self, bot, close_id):
         if not self.send_out:
-            return "Опрос не был отправлен"
+            return "Опрос еще не был отправлен"
         for chat_id in self.polls_ids:
-            await bot.stop_poll(chat_id, self.polls_ids[chat_id])
+            try:
+                await bot.stop_poll(chat_id, self.polls_ids[chat_id])
+            except:
+                pass
 
         await self.send_results(bot, close_id)
         if close_id != self.innit_id:

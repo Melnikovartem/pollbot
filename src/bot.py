@@ -223,12 +223,23 @@ async def cmd_start(message: types.Message):
     await message.answer(f"`{secret_key}`", parse_mode="Markdown")
 
 
+@dp.message_handler(commands=["ask"])
+async def cmd_start(message: types.Message):
+    check(message.chat.id)
+    if not poll_active:
+        await message.answer("Опрос не найден")
+        return
+    await poll_active.send_options(bot, message.chat.id)
+    await poll_active.send_poll(bot, message.chat.id)
+
+
 @dp.message_handler(commands=["help"])
 async def cmd_start(message: types.Message):
     check(message.chat.id)
     ans = "Список команд:\n\n"
     ans += "/switch - отключить получение опросов\n"
     ans += "/stats - статистика активного опроса\n"
+    ans += "/ask - запросить копию опроса\n"
     ans += "/help - список команд\n\n"
     ans += f"/poll &lt;amount?&gt; - скачиваю тексты c <a href='{api_url}'>api</a> и отправляю в чаты с опросом\n"
     ans += "/finish - закончить опрос\n\n"

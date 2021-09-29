@@ -124,7 +124,6 @@ async def cmd_start(message: types.Message):
         await poll.send_options(bot, message.chat.id)
     except exceptions.CantParseEntities as e:
         await message.answer(text=f"bad entity")
-        print(poll.texts)
         return
     poll_active = poll
 

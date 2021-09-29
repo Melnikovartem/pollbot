@@ -13,7 +13,10 @@ import pickle
 
 from poll import Poll
 
-bot = Bot(token="248190991:AAFYN8IC-4-Zb6nXzMeBkPvM5YCxst094mw")
+with open("tg_key", 'r') as fp:
+    key = fp.read().split("\n")[0]
+
+bot = Bot(token=key)
 dp = Dispatcher(bot)
 logging.basicConfig(level=logging.INFO)
 
@@ -77,36 +80,46 @@ async def cmd_start(message: types.Message):
 @dp.message_handler(commands=["poll"])
 async def cmd_start(message: types.Message):
     check(message.chat.id)
+    if message.chat.type != types.ChatType.PRIVATE:
+        message.answer("Прошу пройти в лс с такими запросами")
+        return
     if not message.from_user.id in admins:
         await message.answer("Нет доступа")
         return
-    if message.chat.type == types.ChatType.PRIVATE:
 
-        poll = Poll(message.chat.id)
+    global poll_active
+    if poll_active:
+        await message.answer("Закончите активный опрос с /finish")
+        return
 
-        words = message.text.split()
-        if len(words) == 1 or not words[1].isdigit():
-            amount = 2
-        else:
-            amount = int(words[1])
-        waiting = await message.answer(text="generating 0%")
-        for i in range(amount):
-            async with aiohttp.ClientSession() as session:
-                # poll.add_option("somewjafjkljsal jfjasojfiasjfiojasfoi")
-                # continue
+    poll = Poll(message.chat.id)
 
-                async with session.get(api_url) as resp:
-                    data = await resp.json()
-                    poll.add_option(data["text"])
-                    await waiting.edit_text(
-                        text=f"generating {round((i + 1)/amount * 100)}%")
+    words = message.text.split()
+    if len(words) == 1 or not words[1].isdigit():
+        amount = 2
+    else:
+        amount = int(words[1])
+    waiting = await message.answer(text="generating 0%")
+    for i in range(amount):
+        async with aiohttp.ClientSession() as session:
+            # poll.add_option("somewjafjkljsal jfjasojfiasjfiojasfoi")
+            # continue
+
+            async with session.get(api_url) as resp:
+                data = await resp.json()
+                text = data["text"]
+                text.replace("<", "&lt;")
+                text.replace(">", "&gt;")
+                poll.add_option(data["text"])
+                await waiting.edit_text(
+                    text=f"generating {round((i + 1)/amount * 100)}%")
+
     await waiting.delete()
     try:
         await poll.send_options(bot, message.chat.id)
     except exceptions.CantParseEntities as e:
         await message.answer(text=f"bad entity")
         return
-    global poll_active
     poll_active = poll
 
     keyboard_conformation = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -204,14 +217,30 @@ async def cmd_start(message: types.Message):
         return
     await message.answer(f"`{secret_key}`", parse_mode="Markdown")
 
+
+@dp.message_handler(commands=["help"])
+async def cmd_start(message: types.Message):
+    check(message.chat.id)
+    ans = "Список команд:\n\n"
+    ans += "/switch - отключить получение опросов\n"
+    ans += "/stats - статистика активного опроса\n"
+    ans += "/help - список команд\n\n"
+    ans += f"/poll &lt;amount?&gt; - скачиваю тексты c <a href='{api_url}'>api</a> и отправляю в чаты с опросом\n"
+    ans += "/finish - закончить опрос\n\n"
+    ans += "/admin &lt;secret key&gt; - получить админские права\n"
+    ans += "/key - получить секретный ключ\n"
+    ans += "/api &lt;api url&gt; - изменить api url\n"
+    await message.answer(ans, parse_mode="HTML")
+
 remove_keyboard = types.ReplyKeyboardRemove()
 @dp.message_handler(lambda message: message.text == "Отмена")
 async def action_cancel(message: types.Message):
     check(message.chat.id)
 
-    global poll_active
-    if not poll_active:
-        await message.answer("Опрос не найден")
+    if message.chat.type != types.ChatType.PRIVATE:
+        return
+    if not message.from_user.id in admins:
+        await message.answer("Нет доступа")
         return
 
     if poll_active.send_out:
@@ -225,6 +254,11 @@ async def action_cancel(message: types.Message):
 @dp.message_handler(lambda message: message.text == "Ок")
 async def action_cancel(message: types.Message):
     check(message.chat.id)
+    if message.chat.type != types.ChatType.PRIVATE:
+        return
+    if not message.from_user.id in admins:
+        await message.answer("Нет доступа")
+        return
     global poll_active
     if not poll_active:
         await message.answer("Опрос не найден")
@@ -238,6 +272,7 @@ async def action_cancel(message: types.Message):
 @dp.message_handler()
 async def just_check(message: types.Message):
     check(message.chat.id)
+    await message.answer("Попробуйте /help, чтобы узнать что я могу")
 
 
 if __name__ == "__main__":

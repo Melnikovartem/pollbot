@@ -8,6 +8,7 @@ from aiogram import Bot, Dispatcher, executor, types
 from aiogram.utils import deep_linking, exceptions
 from random import choice
 import string
+import asyncio
 
 import pickle
 
